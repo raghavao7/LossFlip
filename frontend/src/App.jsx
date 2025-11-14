@@ -188,7 +188,7 @@ function ChatModal({ who, active, onClose }) {
     (deal?.seller?.id === '671111111111111111111111' && who==='raj') ||
     (deal?.seller?.id === '671111111111111111111112' && who==='neha');
 
-  // load history + robust join
+  // load history + join socket room + listen for updates
   useEffect(() => {
     api.get(`/deals/orders/${order._id}/chat`).then(res => setMessages(res.data));
     const s = io('http://localhost:8080', { extraHeaders: { 'x-user': who } });
@@ -196,8 +196,20 @@ function ChatModal({ who, active, onClose }) {
 
     s.on('connect_error', (e) => console.error('socket connect error', e?.message));
     s.emit('chat:join', { dealId: order.dealId, orderId: order._id });
-    s.on('chat:joined', () => {/* joined room ok */});
-    s.on('chat:new', (m) => setMessages(prev => [...prev, m]));
+    s.on('chat:joined', () => {});
+
+    // new chat messages
+    s.on('chat:new', (m) => {
+      if (m.orderId !== order._id) return;
+      setMessages(prev => [...prev, m]);
+    });
+
+    // order amount/state changes (propose, accept, release, report)
+    s.on('order:updated', (u) => {
+      if (u.orderId !== order._id) return;
+      if (typeof u.amount === 'number') setProposal(u.amount);
+      if (u.state) setState(u.state);
+    });
 
     return () => s.disconnect();
   }, [order._id, order.dealId, who]);
@@ -206,28 +218,21 @@ function ChatModal({ who, active, onClose }) {
     if (boxRef.current) boxRef.current.scrollTop = boxRef.current.scrollHeight;
   }, [messages]);
 
-  // optimistic send
+  // send WITHOUT optimistic add (fixes double messages)
   const send = (e) => {
     e.preventDefault();
     const body = text.trim();
     if (!body) return;
-    const myId = who==='raj' ? '671111111111111111111111' : '671111111111111111111112';
-    const myName = who==='raj' ? 'Raj Student' : 'Neha Buyer';
-    const temp = {
-      _id: 'temp_'+Date.now(),
-      dealId: order.dealId,
-      orderId: order._id,
-      from: { id: myId, name: myName },
-      body,
-      createdAt: new Date().toISOString()
-    };
-    setMessages(prev => [...prev, temp]);
-    setText('');
     socketRef.current.emit('chat:send', { dealId: order.dealId, orderId: order._id, body });
+    setText('');
   };
 
   const propose = async () => {
-    const { data } = await api.post(`/deals/${order.dealId}/escrow-propose`, { amount: Number(proposal), orderId: order._id });
+    const { data } = await api.post(
+      `/deals/${order.dealId}/escrow-propose`,
+      { amount: Number(proposal), orderId: order._id }
+    );
+    // local update (other side will get socket event)
     setProposal(data.amount);
   };
 
@@ -287,8 +292,12 @@ function ChatModal({ who, active, onClose }) {
 
             {iAmSeller ? (
               <div className="row" style={{ marginTop: 8 }}>
-                <input type="number" value={proposal}
-                       onChange={e=>setProposal(e.target.value)} placeholder="Propose amount (per unit)" />
+                <input
+                  type="number"
+                  value={proposal}
+                  onChange={e=>setProposal(e.target.value)}
+                  placeholder="Propose amount (per unit)"
+                />
                 <button onClick={propose}>Propose</button>
               </div>
             ) : (
@@ -296,7 +305,11 @@ function ChatModal({ who, active, onClose }) {
                 <div className="small">
                   Amount: ₹{proposal} × {order.quantity} • Escrow fee (3%): ₹{buyerFee} • <b>Total: ₹{totalBuyerPays}</b>
                 </div>
-                {state === 'initiated' && <button className="primary" onClick={acceptAndPay}>Accept & Pay (Hold)</button>}
+                {state === 'initiated' && (
+                  <button className="primary" onClick={acceptAndPay}>
+                    Accept & Pay (Hold)
+                  </button>
+                )}
                 {state === 'paid_held' && (
                   <div className="row">
                     <button className="primary" onClick={release}>Release Payment</button>
@@ -311,3 +324,4 @@ function ChatModal({ who, active, onClose }) {
     </div>
   );
 }
+
