@@ -6,6 +6,8 @@ import http from 'http';
 import { Server as SocketIOServer } from 'socket.io';
 
 import dealRouter from './routes/deal.routes.js';
+import adminRouter from './routes/admin.routes.js';
+
 import ChatMessage from './models/ChatMessage.js';
 
 const app = express();
@@ -56,14 +58,32 @@ io.on('connection', (socket) => {
       body: (msg.body || '').toString()
     });
     io.to(room).emit('chat:new', {
-      _id: saved._id, dealId: saved.dealId, orderId: saved.orderId,
-      from: saved.from, body: saved.body, createdAt: saved.createdAt
+      _id: saved._id,
+      dealId: saved.dealId,
+      orderId: saved.orderId,
+      from: saved.from,
+      body: saved.body,
+      createdAt: saved.createdAt
+    });
+  });
+
+  // 🔴 NEW: typing indicator
+  socket.on('typing', (payload = {}) => {
+    const { orderId, isTyping } = payload;
+    if (!orderId) return;
+    const room = `order:${orderId}`;
+    io.to(room).emit('typing', {
+      orderId,
+      from: { id: u._id, name: u.name },
+      isTyping: !!isTyping
     });
   });
 });
 
+
 // REST routes
 app.use('/api/deals', dealRouter);
+app.use('/api/admin', adminRouter);
 
 const port = Number(process.env.PORT || 8080);
 server.listen(port, () => console.log(`✅ API+WS on http://localhost:${port}`));

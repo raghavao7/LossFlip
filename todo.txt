@@ -1,0 +1,110 @@
+🚀 Next Feature Options (Pick One!)
+1️⃣ Unread Messages + Notifications
+
+Red dot on each chat thread
+
+“Seller is typing…” indicator
+
+Sound/vibration on new messages
+
+Badge count on “Chats” panel
+
+2️⃣ Smart Stock + Auto-Disable Deal
+
+When stock hits 0 → disable Grab button
+
+Auto-mark deal as “SOLD OUT”
+
+Seller gets a “Restock?” option
+
+3️⃣ Payment Gateway Simulation (Level-1)
+
+Without real UPI gateway →
+
+Payment modal → “Pay ₹XYZ using mock UPI”
+
+Generates fake transaction ID
+
+Moves order to paid_held
+
+Logs transaction in DB
+
+4️⃣ File Upload in Chat
+
+Supports:
+
+Screenshot/image upload (proofs)
+
+Video screen-recording upload
+
+Delivered via chat
+
+Saved in /uploads + MongoDB
+
+5️⃣ User Profiles + Real Login (JWT)
+
+Replace the fake header with:
+
+Signup/Login
+
+JWT tokens
+
+Profile name, campus, phone number
+
+KYC/Banned accounts
+
+Seller verification badge
+
+6️⃣ Admin Dashboard (Level-1)
+
+Admin can see:
+
+All deals
+
+All orders
+
+All disputes
+
+All reports
+
+“Resolve dispute” page → release/refund buttons
+
+7️⃣ UI Upgrade: WhatsApp-like Chat
+
+Bubbles
+
+Colors
+
+Time labels
+
+Seen tick marks
+
+Smooth scroll + animations
+
+Compact layout
+
+8️⃣ Offer/Counter-Offer System
+
+Just like OLX chat:
+
+Seller sets price
+
+Buyer sends counter-offer
+
+Seller accepts/rejects
+
+Creates an “agreed price” snap
+
+9)location based,and distance based
+
+
+
+From here, nice future upgrades we can bolt on (again, safely):
+
+Add a “Payments” history tab (just reading current orders).
+
+Add status badges in Chats (“Awaiting Payment”, “Paid & Held”, “Released”, “In Dispute”).
+
+Start wiring basic auth (JWT) instead of x-user header.
+
+Whenever you’re ready, tell me what you want to plug in next and I’ll keep it as clean as this change.

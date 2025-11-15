@@ -1,3 +1,6 @@
+
+
+
 // import { Router } from 'express';
 // import Deal from '../models/Deal.js';
 // import Order from '../models/Order.js';
@@ -22,7 +25,7 @@
 //   return d;
 // }
 
-// // helper: compute 3% fee on total (amount * quantity)
+// // helper: 3% fee on total (amount * quantity)
 // function feeOnTotal(orderLike) {
 //   const amount = Number(orderLike.amount) || 0;
 //   const qty = Number(orderLike.quantity) || 1;
@@ -106,7 +109,7 @@
 //   if (String(deal.seller.id) === String(req.user._id))
 //     return res.status(400).json({ error: 'You cannot grab your own deal' });
 
-//   // try reuse existing initiated order for this buyer+deal
+//   // reuse existing initiated order for this buyer+deal, else create new
 //   let order = await Order.findOne({
 //     dealId: deal._id, 'buyer.id': req.user._id, state: 'initiated'
 //   });
@@ -116,18 +119,19 @@
 //     order.fees = feeOnTotal(order);
 //     await order.save();
 
-//     // notify seller thread updated
 //     const io = req.app.get('io');
-//     if (io) io.to(`user:${deal.seller.id}`).emit('thread:updated', { orderId: order._id, quantity: order.quantity });
+//     if (io) io.to(`user:${deal.seller.id}`).emit('thread:updated', {
+//       orderId: order._id,
+//       quantity: order.quantity
+//     });
 //     return res.json(order);
 //   }
 
-//   // create new thread (initiated)
 //   order = await Order.create({
 //     dealId: deal._id,
 //     seller: { id: deal.seller.id, name: deal.seller.name },
 //     buyer: { id: req.user._id, name: req.user.name },
-//     amount: deal.dealPrice,              // per-unit price snapshot
+//     amount: deal.dealPrice,
 //     quantity: 1,
 //     fees: feeOnTotal({ amount: deal.dealPrice, quantity: 1 }),
 //     delivery: {
@@ -136,9 +140,13 @@
 //     }
 //   });
 
-//   // notify seller about new thread
 //   const io = req.app.get('io');
-//   if (io) io.to(`user:${deal.seller.id}`).emit('thread:new', { orderId: order._id, dealId: deal._id, buyer: order.buyer });
+//   if (io) io.to(`user:${deal.seller.id}`).emit('thread:new', {
+//     orderId: order._id,
+//     dealId: deal._id,
+//     buyer: order.buyer
+//   });
+
 //   res.status(201).json(order);
 // });
 
@@ -157,8 +165,18 @@
 //   if (!order) return res.status(404).json({ error: 'Order not found' });
 
 //   order.amount = Number(amount);
-//   order.fees = feeOnTotal(order); // recalc 3% on (amount * quantity)
+//   order.fees = feeOnTotal(order);
 //   await order.save();
+
+//   // 🔔 notify both buyer & seller in this order room
+//   const io = req.app.get('io');
+//   if (io) io.to(`order:${order._id}`).emit('order:updated', {
+//     orderId: order._id,
+//     amount: order.amount,
+//     quantity: order.quantity,
+//     fees: order.fees,
+//     state: order.state
+//   });
 
 //   res.json(order);
 // });
@@ -170,7 +188,6 @@
 //   if (String(order.buyer.id) !== String(req.user._id))
 //     return res.status(403).json({ error: 'Only buyer can accept/pay' });
 
-//   // ensure enough stock then decrement atomically
 //   const updatedDeal = await Deal.findOneAndUpdate(
 //     { _id: order.dealId, stock: { $gte: order.quantity } },
 //     { $inc: { stock: -order.quantity } },
@@ -180,6 +197,16 @@
 
 //   order.state = 'paid_held';
 //   await order.save();
+
+//   const io = req.app.get('io');
+//   if (io) io.to(`order:${order._id}`).emit('order:updated', {
+//     orderId: order._id,
+//     amount: order.amount,
+//     quantity: order.quantity,
+//     fees: order.fees,
+//     state: order.state
+//   });
+
 //   res.json(order);
 // });
 
@@ -192,6 +219,16 @@
 
 //   order.state = 'released';
 //   await order.save();
+
+//   const io = req.app.get('io');
+//   if (io) io.to(`order:${order._id}`).emit('order:updated', {
+//     orderId: order._id,
+//     amount: order.amount,
+//     quantity: order.quantity,
+//     fees: order.fees,
+//     state: order.state
+//   });
+
 //   res.json(order);
 // });
 
@@ -206,6 +243,16 @@
 //   order.state = 'in_dispute';
 //   order.dispute = { reason: reason || '', proofs: Array.isArray(proofs) ? proofs : [] };
 //   await order.save();
+
+//   const io = req.app.get('io');
+//   if (io) io.to(`order:${order._id}`).emit('order:updated', {
+//     orderId: order._id,
+//     amount: order.amount,
+//     quantity: order.quantity,
+//     fees: order.fees,
+//     state: order.state
+//   });
+
 //   res.json(order);
 // });
 
@@ -228,7 +275,8 @@ function fakeAuth(req, _res, next) {
   next();
 }
 r.use(fakeAuth);
-/* ---------------------------------------- */
+
+/* ---------- helpers ---------- */
 
 function redact(doc, currentUserId) {
   const d = doc.toObject({ virtuals: true });
@@ -236,7 +284,7 @@ function redact(doc, currentUserId) {
   return d;
 }
 
-// helper: 3% fee on total (amount * quantity)
+// 3% fee on total (amount * quantity)
 function feeOnTotal(orderLike) {
   const amount = Number(orderLike.amount) || 0;
   const qty = Number(orderLike.quantity) || 1;
@@ -320,29 +368,24 @@ r.post('/:id/grab', async (req, res) => {
   if (String(deal.seller.id) === String(req.user._id))
     return res.status(400).json({ error: 'You cannot grab your own deal' });
 
-  // reuse existing initiated order for this buyer+deal, else create new
+  // reuse existing initiated order for this buyer+deal
   let order = await Order.findOne({
-    dealId: deal._id, 'buyer.id': req.user._id, state: 'initiated'
+    dealId: deal._id,
+    'buyer.id': req.user._id,
+    state: 'initiated'
   });
 
   if (order) {
-    order.quantity += 1;
-    order.fees = feeOnTotal(order);
-    await order.save();
-
-    const io = req.app.get('io');
-    if (io) io.to(`user:${deal.seller.id}`).emit('thread:updated', {
-      orderId: order._id,
-      quantity: order.quantity
-    });
+    // just return it; quantity changes will be done via /orders/:id/quantity
     return res.json(order);
   }
 
+  // create new thread (initiated)
   order = await Order.create({
     dealId: deal._id,
     seller: { id: deal.seller.id, name: deal.seller.name },
     buyer: { id: req.user._id, name: req.user.name },
-    amount: deal.dealPrice,
+    amount: deal.dealPrice,              // per-unit price snapshot
     quantity: 1,
     fees: feeOnTotal({ amount: deal.dealPrice, quantity: 1 }),
     delivery: {
@@ -351,6 +394,7 @@ r.post('/:id/grab', async (req, res) => {
     }
   });
 
+  // notify seller about new thread
   const io = req.app.get('io');
   if (io) io.to(`user:${deal.seller.id}`).emit('thread:new', {
     orderId: order._id,
@@ -359,6 +403,39 @@ r.post('/:id/grab', async (req, res) => {
   });
 
   res.status(201).json(order);
+});
+
+// CHANGE QUANTITY (only in initiated)
+r.post('/orders/:orderId/quantity', async (req, res) => {
+  const { quantity } = req.body || {};
+  const newQty = Number(quantity);
+  if (!Number.isFinite(newQty) || newQty < 1) {
+    return res.status(400).json({ error: 'Quantity must be >= 1' });
+  }
+
+  const order = await Order.findById(req.params.orderId);
+  if (!order) return res.status(404).json({ error: 'Order not found' });
+  if (order.state !== 'initiated') {
+    return res.status(400).json({ error: 'Cannot change quantity after payment/dispute' });
+  }
+  if (String(order.buyer.id) !== String(req.user._id)) {
+    return res.status(403).json({ error: 'Only buyer can change quantity' });
+  }
+
+  order.quantity = newQty;
+  order.fees = feeOnTotal(order);
+  await order.save();
+
+  const io = req.app.get('io');
+  if (io) io.to(`order:${order._id}`).emit('order:updated', {
+    orderId: order._id,
+    amount: order.amount,
+    quantity: order.quantity,
+    fees: order.fees,
+    state: order.state
+  });
+
+  res.json(order);
 });
 
 // SELLER proposes escrow per-unit amount (escrow must be enabled)
@@ -379,7 +456,6 @@ r.post('/:id/escrow-propose', async (req, res) => {
   order.fees = feeOnTotal(order);
   await order.save();
 
-  // 🔔 notify both buyer & seller in this order room
   const io = req.app.get('io');
   if (io) io.to(`order:${order._id}`).emit('order:updated', {
     orderId: order._id,
