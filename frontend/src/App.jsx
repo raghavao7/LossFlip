@@ -339,26 +339,49 @@ function ChatModal({ who, active, onClose }) {
   const statusInfo = getOrderStatusInfo(state);
 
   const myId = who === 'raj' ? RAJ_ID : NEHA_ID;
+    // per-message ticks state: id -> { sent, delivered, seen }
+  const [messageStatus, setMessageStatus] = useState({});
 
   const iAmSeller =
     (deal?.seller?.id === RAJ_ID && who === 'raj') ||
     (deal?.seller?.id === NEHA_ID && who === 'neha');
 
   // load history + join room + listen
+    // load history + join room + listen (including ticks)
   useEffect(() => {
-    api.get(`/deals/orders/${order._id}/chat`).then(res => setMessages(res.data));
+    api.get(`/deals/orders/${order._id}/chat`).then(res => setMessages(res.data || []));
+
     const s = io('http://localhost:8080', { extraHeaders: { 'x-user': who } });
     socketRef.current = s;
 
     s.on('connect_error', (e) => console.error('socket connect error', e?.message));
+
     s.emit('chat:join', { dealId: order.dealId, orderId: order._id });
     s.on('chat:joined', () => {});
 
+    // new message from server
     s.on('chat:new', (m) => {
       if (m.orderId !== order._id) return;
+
       setMessages(prev => [...prev, m]);
+
+      setMessageStatus(prev => {
+        const next = { ...prev };
+
+        if (m.from?.id === myId) {
+          // my outgoing message reached server -> ✓ (sent)
+          next[m._id] = { ...(next[m._id] || {}), sent: true };
+        } else {
+          // incoming message: I'm viewing this chat, so it's both delivered and seen for the sender
+          s.emit('chat:delivered', { orderId: order._id, messageIds: [m._id] });
+          s.emit('chat:seen', { orderId: order._id, messageId: m._id });
+        }
+
+        return next;
+      });
     });
 
+    // order updates (amount, quantity, state) – keep as is
     s.on('order:updated', (u) => {
       if (u.orderId !== order._id) return;
       if (typeof u.amount === 'number') setProposal(u.amount);
@@ -366,8 +389,42 @@ function ChatModal({ who, active, onClose }) {
       if (u.state) setState(u.state);
     });
 
-    return () => s.disconnect();
-  }, [order._id, order.dealId, who]);
+    // delivered ack: message has reached the other user
+    s.on('chat:delivered', ({ orderId, messageIds } = {}) => {
+      if (orderId !== order._id || !Array.isArray(messageIds)) return;
+      setMessageStatus(prev => {
+        const next = { ...prev };
+        messageIds.forEach(id => {
+          const curr = next[id] || {};
+          next[id] = { ...curr, sent: true, delivered: true };
+        });
+        return next;
+      });
+    });
+
+    // seen ack: other user has the chat open and saw the message
+    s.on('chat:seen', ({ orderId, messageId } = {}) => {
+      if (orderId !== order._id || !messageId) return;
+      setMessageStatus(prev => ({
+        ...prev,
+        [messageId]: {
+          ...(prev[messageId] || {}),
+          sent: true,
+          delivered: true,
+          seen: true
+        }
+      }));
+    });
+
+    return () => {
+      s.off('chat:new');
+      s.off('order:updated');
+      s.off('chat:delivered');
+      s.off('chat:seen');
+      s.disconnect();
+    };
+  }, [order._id, order.dealId, who, myId]);
+
 
   useEffect(() => {
     if (boxRef.current) boxRef.current.scrollTop = boxRef.current.scrollHeight;
@@ -455,17 +512,41 @@ function ChatModal({ who, active, onClose }) {
           <button onClick={onClose}>✕</button>
         </div>
 
-        <div className="chat-box" ref={boxRef}>
+                <div className="chat-box" ref={boxRef}>
           {messages.map(m => {
             const me = myId === m.from?.id;
+            const status = messageStatus[m._id] || {};
+
+            let tickText = '';
+            let tickClass = 'ticks';
+
+            if (me) {
+              if (status.seen) {
+                tickText = '✓✓';
+                tickClass += ' ticks-seen';
+              } else if (status.delivered) {
+                tickText = '✓✓';
+              } else if (status.sent) {
+                tickText = '✓';
+              }
+            }
+
             return (
               <div key={m._id} className={`chat-msg ${me ? 'chat-me' : ''}`}>
-                <div className="small">{m.from?.name}</div>
+                <div className="small">
+                  {m.from?.name}
+                  {me && tickText && (
+                    <span className={tickClass} style={{ marginLeft: 6 }}>
+                      {tickText}
+                    </span>
+                  )}
+                </div>
                 <div>{m.body}</div>
               </div>
             );
           })}
         </div>
+
 
         <form onSubmit={send} className="row" style={{ marginTop: 8 }}>
           <input

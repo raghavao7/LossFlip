@@ -22,3 +22,13 @@ button.primary { background:#6c5ce7; border-color:#6c5ce7; }
 .chat-msg { margin:6px 0; }
 .chat-me { text-align: right; }
 .small { font-size: 12px; opacity: .7; }
+
+
+.ticks {
+  font-size: 0.75rem;
+  opacity: 0.7;
+}
+
+.ticks-seen {
+  color: #7c3aed; /* purple-ish for "seen" */
+}

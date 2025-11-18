@@ -66,6 +66,24 @@ io.on('connection', (socket) => {
       createdAt: saved.createdAt
     });
   });
+    // ✅ delivered: other user has received the message
+  socket.on('chat:delivered', (payload = {}) => {
+    const { orderId, messageIds } = payload;
+    if (!orderId || !Array.isArray(messageIds) || messageIds.length === 0) return;
+
+    const room = `order:${orderId}`;
+    io.to(room).emit('chat:delivered', { orderId, messageIds });
+  });
+
+  // ✅ seen: other user has chat open and has seen this message
+  socket.on('chat:seen', (payload = {}) => {
+    const { orderId, messageId } = payload;
+    if (!orderId || !messageId) return;
+
+    const room = `order:${orderId}`;
+    io.to(room).emit('chat:seen', { orderId, messageId });
+  });
+
 
   // 🔴 NEW: typing indicator
   socket.on('typing', (payload = {}) => {
