@@ -32,3 +32,11 @@ button.primary { background:#6c5ce7; border-color:#6c5ce7; }
 .ticks-seen {
   color: #7c3aed; /* purple-ish for "seen" */
 }
+.chat-msg.system-msg {
+  text-align: center;
+  opacity: 0.85;
+}
+
+.text-dim {
+  color: #9ca3af;
+}

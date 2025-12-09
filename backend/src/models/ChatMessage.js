@@ -8,7 +8,14 @@ const ChatMessageSchema = new mongoose.Schema(
       id: { type: String, required: true },
       name: { type: String, required: true }
     },
-    body: { type: String, required: true }
+    body: { type: String, required: true },
+
+    // NEW: distinguish between normal chat vs system events
+    kind: {
+      type: String,
+      enum: ['user', 'system'],
+      default: 'user'
+    }
   },
   { timestamps: true }
 );

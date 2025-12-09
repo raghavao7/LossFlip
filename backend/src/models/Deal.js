@@ -29,7 +29,11 @@ const DealSchema = new mongoose.Schema({
     brand: { type: String },
     terms: { type: String }
   },
-
+ location: {
+    city: { type: String, trim: true },
+    area: { type: String, trim: true },
+    pincode: { type: String, trim: true }
+  },
   images: [{ type: String }],
   digitalSecret: { type: String, default: '' }
 }, { timestamps: true });

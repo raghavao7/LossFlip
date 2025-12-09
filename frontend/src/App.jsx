@@ -1,3 +1,5 @@
+
+
 import { useEffect, useRef, useState } from 'react';
 import { io } from 'socket.io-client';
 import { api, setActingUser } from './api';
@@ -21,6 +23,9 @@ function getOrderStatusInfo(state) {
   }
 }
 
+/* =======================
+   MAIN APP
+   ======================= */
 export default function App() {
   const [who, setWho] = useState('raj');
   const [health, setHealth] = useState(null);
@@ -30,11 +35,73 @@ export default function App() {
   const [chatOpen, setChatOpen] = useState(false);
   const [active, setActive] = useState(null);  // { deal, order }
   const socketRef = useRef(null);
-
+  const audioRef = useRef(null);
   const myId = who === 'raj' ? RAJ_ID : NEHA_ID;
 
-  const refreshDeals = () => api.get('/deals').then(res => setDeals(res.data));
-  const refreshThreads = () => api.get('/deals/me/threads').then(res => setThreads(res.data));
+  // 🔔 play notification sound
+  const playPing = () => {
+    if (!audioRef.current) return;
+    try {
+      audioRef.current.currentTime = 0;
+      audioRef.current.play().catch(() => {});
+    } catch (_) {}
+  };
+
+
+
+
+
+
+
+
+
+  // // robust helpers: handle array OR {deals}, {orders}
+  // const refreshDeals = () =>
+  //   api.get('/deals').then(res => {
+  //     const data = res.data;
+  //     const list = Array.isArray(data) ? data : (data?.deals || []);
+  //     setDeals(list);
+  //   });
+
+
+
+
+
+
+
+
+
+
+
+    // NEW: location filter (per user)
+  const [locationCity, setLocationCity] = useState(() => {
+    return localStorage.getItem('lossflip_city') || '';
+  });
+
+  // NEW: shared deal from URL like ?deal=abcdef
+  const [sharedDealId] = useState(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      return params.get('deal');
+    } catch {
+      return null;
+    }
+  });
+
+  // refreshDeals can optionally take a city override
+  const refreshDeals = (cityOverride) => {
+    const city = cityOverride !== undefined ? cityOverride : locationCity;
+    const params = city ? { city } : {};
+    return api.get('/deals', { params }).then(res => setDeals(res.data));
+  };
+
+
+  const refreshThreads = () =>
+    api.get('/deals/me/threads').then(res => {
+      const data = res.data;
+      const list = Array.isArray(data) ? data : (data?.orders || data?.threads || []);
+      setThreads(list);
+    });
 
   useEffect(() => {
     setActingUser(who);
@@ -45,29 +112,36 @@ export default function App() {
     const s = io('http://localhost:8080', { extraHeaders: { 'x-user': who } });
     socketRef.current = s;
 
-    // seller notifications for new / updated threads
+    // seller/buyer notifications for new / updated threads
     s.on('thread:new', (payload) => {
       if (!payload?.orderId) return;
       setUnread(prev => ({ ...prev, [payload.orderId]: true }));
       refreshThreads();
+      playPing();
     });
 
     s.on('thread:updated', (payload) => {
       if (!payload?.orderId) return;
       setUnread(prev => ({ ...prev, [payload.orderId]: true }));
       refreshThreads();
+      playPing();
+    });
+
+    s.on('connect_error', (e) => {
+      console.error('socket connect error', e?.message);
     });
 
     return () => {
       s.disconnect();
+      socketRef.current = null;
     };
-  }, [who]);
+  }, [who]); // re-run when acting user changes
 
   const switchUser = (u) => {
     setWho(u);
   };
 
-  const [form, setForm] = useState({
+    const [form, setForm] = useState({
     title: '',
     category: 'product',
     faceValue: 0,
@@ -76,8 +150,11 @@ export default function App() {
     escrowRequired: true,
     stock: 1,
     paymentMethodsAccepted: 'UPI',
-    digitalSecret: ''
+    digitalSecret: '',
+    city: '',
+    pincode: ''
   });
+
 
   const createDeal = async (e) => {
     e.preventDefault();
@@ -87,10 +164,14 @@ export default function App() {
       dealPrice: Number(form.dealPrice || 0),
       stock: Number(form.stock || 1),
       paymentMethodsAccepted: form.paymentMethodsAccepted
-        ? form.paymentMethodsAccepted.split(',').map(s => s.trim()).filter(Boolean) : []
+        ? form.paymentMethodsAccepted.split(',').map(s => s.trim()).filter(Boolean)
+        : [],
+      city: form.city,
+      pincode: form.pincode
     };
-    await api.post('/deals', payload);
-    setForm({
+    try {
+      await api.post('/deals', payload);
+          setForm({
       title: '',
       category: 'product',
       faceValue: 0,
@@ -99,14 +180,18 @@ export default function App() {
       escrowRequired: true,
       stock: 1,
       paymentMethodsAccepted: 'UPI',
-      digitalSecret: ''
+      digitalSecret: '',
+      city: '',
+      pincode: ''
     });
-    refreshDeals();
+      refreshDeals();
+    } catch (err) {
+      console.error('create deal failed', err.response?.data || err.message);
+    }
   };
 
   // Grab deal: reuse existing initiated thread for this buyer+deal if present
   const grab = async (deal) => {
-    // see if we already have an initiated order for this deal as current buyer
     const existing = threads.find(t =>
       t.dealId === deal._id &&
       t.state === 'initiated' &&
@@ -114,7 +199,6 @@ export default function App() {
     );
 
     if (existing) {
-      // just open existing chat, don't create new or change quantity
       const fullDeal = deals.find(d => d._id === deal._id) || deal;
       setActive({ deal: fullDeal, order: existing });
       setUnread(prev => {
@@ -126,12 +210,15 @@ export default function App() {
       return;
     }
 
-    // otherwise create a new thread
-    const { data: order } = await api.post(`/deals/${deal._id}/grab`, {});
-    const fullDeal = deals.find(d => d._id === deal._id) || deal;
-    setActive({ deal: fullDeal, order });
-    setChatOpen(true);
-    refreshThreads();
+    try {
+      const { data: order } = await api.post(`/deals/${deal._id}/grab`, {});
+      const fullDeal = deals.find(d => d._id === deal._id) || deal;
+      setActive({ deal: fullDeal, order });
+      setChatOpen(true);
+      refreshThreads();
+    } catch (err) {
+      console.error('grab failed', err.response?.data || err.message);
+    }
   };
 
   const openThread = (t) => {
@@ -147,17 +234,44 @@ export default function App() {
 
   return (
     <div className="container">
-      <div className="row" style={{ justifyContent: 'space-between' }}>
+            <div className="row" style={{ justifyContent: 'space-between' }}>
         <h1>LossFlip (MVP)</h1>
-        <div>
-          Acting as:&nbsp;
-          <select value={who} onChange={e => switchUser(e.target.value)}>
-            <option value="raj">Raj (seller/buyer)</option>
-            <option value="neha">Neha (buyer/seller)</option>
-          </select>
+        <div className="row" style={{ gap: 12, alignItems: 'center' }}>
+          <div>
+            Acting as:&nbsp;
+            <select value={who} onChange={e => switchUser(e.target.value)}>
+              <option value="raj">Raj (seller/buyer)</option>
+              <option value="neha">Neha (buyer/seller)</option>
+            </select>
+          </div>
+
+          <div>
+            Location:&nbsp;
+            <select
+              value={locationCity}
+              onChange={async (e) => {
+                const city = e.target.value;
+                setLocationCity(city);
+                localStorage.setItem('lossflip_city', city);
+                await refreshDeals(city);
+              }}
+            >
+              <option value="">All locations</option>
+              <option value="Hyderabad">Hyderabad</option>
+              <option value="Delhi">Delhi</option>
+              <option value="Bangalore">Bangalore</option>
+              <option value="Chennai">Chennai</option>
+              <option value="Mumbai">Mumbai</option>
+            </select>
+          </div>
         </div>
       </div>
+
+
       <p className="small">API health: {health ? 'OK' : '…checking'}</p>
+
+      {/* notification sound */}
+      <audio ref={audioRef} src="/notification.mp3" preload="auto" />
 
       <div className="grid" style={{ gridTemplateColumns: '1fr 1fr', gap: 16 }}>
         <div className="card">
@@ -198,8 +312,11 @@ export default function App() {
               <input
                 type="checkbox"
                 checked={form.escrowRequired}
-                onChange={e => setForm({ ...form, escrowRequired: e.target.checked })}
-              /> Escrow required
+                onChange={e =>
+                  setForm({ ...form, escrowRequired: e.target.checked })
+                }
+              />{' '}
+              Escrow required
             </label>
             <input
               type="number"
@@ -210,14 +327,31 @@ export default function App() {
             <input
               placeholder="Payment methods (e.g., UPI, USDT)"
               value={form.paymentMethodsAccepted}
-              onChange={e => setForm({ ...form, paymentMethodsAccepted: e.target.value })}
+              onChange={e =>
+                setForm({ ...form, paymentMethodsAccepted: e.target.value })
+              }
+            />
+            {/* NEW: location for this deal */}
+            <input
+              placeholder="City (e.g., Hyderabad)"
+              value={form.city}
+              onChange={e => setForm({ ...form, city: e.target.value })}
+            />
+            <input
+              placeholder="Pincode (optional)"
+              value={form.pincode}
+              onChange={e => setForm({ ...form, pincode: e.target.value })}
             />
             <textarea
               placeholder="Digital secret (code/link delivered to buyer)"
               value={form.digitalSecret}
-              onChange={e => setForm({ ...form, digitalSecret: e.target.value })}
+              onChange={e =>
+                setForm({ ...form, digitalSecret: e.target.value })
+              }
             />
-            <button className="primary" type="submit">Create</button>
+            <button className="primary" type="submit">
+              Create
+            </button>
           </form>
         </div>
 
@@ -229,21 +363,89 @@ export default function App() {
                 const iAmSeller =
                   (d.seller?.id === RAJ_ID && who === 'raj') ||
                   (d.seller?.id === NEHA_ID && who === 'neha');
-                return (
-                  <li key={d._id}>
+                                return (
+                  <li
+                    key={d._id}
+                    className={sharedDealId === d._id ? 'shared-deal' : ''}
+                  >
                     <div className="row" style={{ justifyContent: 'space-between' }}>
                       <div>
-                        <b>{d.title}</b> <span className="badge">{d.category}</span><br />
+                        <b>{d.title}</b>{' '}
+                        <span className="badge">{d.category}</span>
+                        {sharedDealId === d._id && (
+                          <span
+                            className="badge"
+                            style={{ marginLeft: 6, backgroundColor: '#4b9cff', color: '#0b0b10' }}
+                          >
+                            Shared deal
+                          </span>
+                        )}
+                        <br />
                         <span>₹{d.dealPrice}</span>
                         {d.faceValue > 0 && (
                           <span> • Face ₹{d.faceValue} • Disc {d.discountPct}%</span>
                         )}
-                        <div className="small">by {d.seller?.name} • Stock: {d.stock}</div>
+                        <div className="small">
+                          by {d.seller?.name} • Stock: {d.stock}
+                          {d.location?.city && (
+                            <>
+                              {' '}• {d.location.city}
+                              {d.location?.pincode && ` (${d.location.pincode})`}
+                            </>
+                          )}
+                        </div>
                       </div>
-                      <div style={{ display: 'flex', alignItems: 'center' }}>
+
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        {/* buyer side */}
                         {!iAmSeller && d.stock > 0 && (
-                          <button onClick={() => grab(d)} className="primary">Grab</button>
+                          <button onClick={() => grab(d)} className="primary">
+                            Grab
+                          </button>
                         )}
+
+                        {/* seller quick restock (we already added before) */}
+                        {iAmSeller && (
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              const raw = window.prompt('Add how many units to stock?', '1');
+                              if (!raw) return;
+                              const amount = Number(raw);
+                              if (!Number.isFinite(amount) || amount <= 0) {
+                                alert('Enter a positive number');
+                                return;
+                              }
+                              try {
+                                await api.post(`/deals/${d._id}/restock`, { amount });
+                                await refreshDeals();
+                              } catch (err) {
+                                console.error('restock failed', err);
+                                alert('Failed to restock');
+                              }
+                            }}
+                          >
+                            Restock
+                          </button>
+                        )}
+
+                        {/* NEW: shareable link */}
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            const url = `${window.location.origin}?deal=${d._id}`;
+                            try {
+                              await navigator.clipboard.writeText(url);
+                              alert('Deal link copied to clipboard');
+                            } catch {
+                              alert(url); // fallback: at least show the URL
+                            }
+                          }}
+                        >
+                          Share
+                        </button>
+
+                        {/* sold out badge */}
                         {d.stock === 0 && (
                           <span
                             className="badge"
@@ -258,12 +460,43 @@ export default function App() {
                     <div className="small" style={{ marginTop: 6 }}>{d.description}</div>
                   </li>
                 );
+
               })}
+                            {deals.length === 0 && (
+                <li className="small">
+                  {locationCity
+                    ? <>No deals in <b>{locationCity}</b>.{' '}
+                       <button
+                         type="button"
+                         onClick={async () => {
+                           setLocationCity('');
+                           localStorage.removeItem('lossflip_city');
+                           await refreshDeals('');
+                         }}
+                       >
+                         Show all deals
+                       </button>
+                     </>
+                    : 'No deals yet. Create the first one!'}
+                </li>
+              )}
+
+              {deals.length === 0 && (
+                <li className="small text-dim">No deals yet. Create the first one!</li>
+              )}
             </ul>
           </div>
 
           <div className="card">
-            <h2>Chats</h2>
+            <h2>
+              Chats
+              {Object.keys(unread).length > 0 && (
+                <span className="badge" style={{ marginLeft: 8 }}>
+                  {Object.keys(unread).length}
+                </span>
+              )}
+            </h2>
+
             <ul className="list">
               {threads.map(t => {
                 const statusInfo = getOrderStatusInfo(t.state);
@@ -271,19 +504,32 @@ export default function App() {
                   <li
                     key={t._id}
                     className="row"
-                    style={{ justifyContent: 'space-between', alignItems: 'center' }}
+                    style={{
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      cursor: 'pointer'
+                    }}
+                    onClick={() => openThread(t)}
                   >
                     <div>
                       <div>
                         <b>{t.deal?.title || 'Deal'}</b>{' '}
                         <span className="badge">{t.deal?.category || '-'}</span>
                         {unread[t._id] && (
-                          <span style={{ marginLeft: 8, fontSize: 12, color: '#ff4d4f' }}>●</span>
+                          <span
+                            style={{
+                              marginLeft: 8,
+                              fontSize: 12,
+                              color: '#ff4d4f'
+                            }}
+                          >
+                            ●
+                          </span>
                         )}
                       </div>
                       <div className="small">
-                        {t.seller?.name} ↔ {t.buyer?.name}{' '}
-                        • <span
+                        {t.seller?.name} ↔ {t.buyer?.name} •{' '}
+                        <span
                           className="badge"
                           style={{
                             backgroundColor: statusInfo.color,
@@ -297,10 +543,15 @@ export default function App() {
                         • ₹{t.amount} × {t.quantity} = ₹{t.amount * t.quantity}
                       </div>
                     </div>
-                    <button onClick={() => openThread(t)}>Open</button>
+                    <button>Open</button>
                   </li>
                 );
               })}
+              {threads.length === 0 && (
+                <li className="small text-dim">
+                  No chat threads yet. Grab a deal to start chatting.
+                </li>
+              )}
             </ul>
           </div>
         </div>
@@ -325,6 +576,10 @@ export default function App() {
   );
 }
 
+/* =======================
+   CHAT MODAL
+   ======================= */
+
 function ChatModal({ who, active, onClose }) {
   const { deal, order } = active;
   const [messages, setMessages] = useState([]);
@@ -337,19 +592,22 @@ function ChatModal({ who, active, onClose }) {
   const socketRef = useRef(null);
   const boxRef = useRef(null);
   const statusInfo = getOrderStatusInfo(state);
+  const [typingName, setTypingName] = useState(null);
+  const typingTimeoutRef = useRef(null);
 
   const myId = who === 'raj' ? RAJ_ID : NEHA_ID;
-    // per-message ticks state: id -> { sent, delivered, seen }
-  const [messageStatus, setMessageStatus] = useState({});
-
+  const [messageStatus, setMessageStatus] = useState({}); // id -> { sent, delivered, seen }
+  const initialAcksSent = useRef(false);
   const iAmSeller =
     (deal?.seller?.id === RAJ_ID && who === 'raj') ||
     (deal?.seller?.id === NEHA_ID && who === 'neha');
 
-  // load history + join room + listen
-    // load history + join room + listen (including ticks)
+  // load history + join room + listen (including ticks + typing)
   useEffect(() => {
-    api.get(`/deals/orders/${order._id}/chat`).then(res => setMessages(res.data || []));
+    api
+      .get(`/deals/orders/${order._id}/chat`)
+      .then(res => setMessages(Array.isArray(res.data) ? res.data : res.data?.messages || []))
+      .catch(err => console.error('load chat failed', err));
 
     const s = io('http://localhost:8080', { extraHeaders: { 'x-user': who } });
     socketRef.current = s;
@@ -359,7 +617,6 @@ function ChatModal({ who, active, onClose }) {
     s.emit('chat:join', { dealId: order.dealId, orderId: order._id });
     s.on('chat:joined', () => {});
 
-    // new message from server
     s.on('chat:new', (m) => {
       if (m.orderId !== order._id) return;
 
@@ -369,10 +626,8 @@ function ChatModal({ who, active, onClose }) {
         const next = { ...prev };
 
         if (m.from?.id === myId) {
-          // my outgoing message reached server -> ✓ (sent)
           next[m._id] = { ...(next[m._id] || {}), sent: true };
         } else {
-          // incoming message: I'm viewing this chat, so it's both delivered and seen for the sender
           s.emit('chat:delivered', { orderId: order._id, messageIds: [m._id] });
           s.emit('chat:seen', { orderId: order._id, messageId: m._id });
         }
@@ -381,7 +636,6 @@ function ChatModal({ who, active, onClose }) {
       });
     });
 
-    // order updates (amount, quantity, state) – keep as is
     s.on('order:updated', (u) => {
       if (u.orderId !== order._id) return;
       if (typeof u.amount === 'number') setProposal(u.amount);
@@ -389,7 +643,6 @@ function ChatModal({ who, active, onClose }) {
       if (u.state) setState(u.state);
     });
 
-    // delivered ack: message has reached the other user
     s.on('chat:delivered', ({ orderId, messageIds } = {}) => {
       if (orderId !== order._id || !Array.isArray(messageIds)) return;
       setMessageStatus(prev => {
@@ -402,7 +655,6 @@ function ChatModal({ who, active, onClose }) {
       });
     });
 
-    // seen ack: other user has the chat open and saw the message
     s.on('chat:seen', ({ orderId, messageId } = {}) => {
       if (orderId !== order._id || !messageId) return;
       setMessageStatus(prev => ({
@@ -416,14 +668,62 @@ function ChatModal({ who, active, onClose }) {
       }));
     });
 
+    s.on('typing', (payload = {}) => {
+      if (payload.orderId !== order._id) return;
+      if (payload.from?.id === myId) return;
+
+      if (!payload.isTyping) {
+        setTypingName(null);
+        if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+        return;
+      }
+
+      setTypingName(payload.from?.name || 'Someone');
+      if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+      typingTimeoutRef.current = setTimeout(() => setTypingName(null), 2000);
+    });
+
     return () => {
       s.off('chat:new');
       s.off('order:updated');
       s.off('chat:delivered');
       s.off('chat:seen');
+      s.off('typing');
       s.disconnect();
+      if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
     };
   }, [order._id, order.dealId, who, myId]);
+
+    // When I open this chat and see the history, mark all
+  // incoming messages as delivered + the latest as seen.
+  useEffect(() => {
+    if (!socketRef.current) return;
+    if (initialAcksSent.current) return;
+    if (!messages.length) return;
+
+    // messages from the OTHER user
+    const incomingIds = messages
+      .filter(m => m.from?.id && m.from.id !== myId)
+      .map(m => m._id)
+      .filter(Boolean);
+
+    if (incomingIds.length === 0) return;
+
+    initialAcksSent.current = true;
+
+    // Mark all as delivered
+    socketRef.current.emit('chat:delivered', {
+      orderId: order._id,
+      messageIds: incomingIds
+    });
+
+    // Mark the latest as seen
+    const lastId = incomingIds[incomingIds.length - 1];
+    socketRef.current.emit('chat:seen', {
+      orderId: order._id,
+      messageId: lastId
+    });
+  }, [messages, myId, order._id]);
 
 
   useEffect(() => {
@@ -442,6 +742,16 @@ function ChatModal({ who, active, onClose }) {
     setText('');
   };
 
+  const handleInputChange = (e) => {
+    const value = e.target.value;
+    setText(value);
+    if (!socketRef.current) return;
+    socketRef.current.emit('typing', {
+      orderId: order._id,
+      isTyping: value.length > 0
+    });
+  };
+
   const propose = async () => {
     const { data } = await api.post(
       `/deals/${order.dealId}/escrow-propose`,
@@ -450,7 +760,6 @@ function ChatModal({ who, active, onClose }) {
     setProposal(data.amount);
   };
 
-  // Open mock payment modal
   const startPayment = () => {
     const fakeId = 'TXN-' + Math.random().toString(36).substring(2, 10).toUpperCase();
     setTxnId(fakeId);
@@ -512,46 +821,71 @@ function ChatModal({ who, active, onClose }) {
           <button onClick={onClose}>✕</button>
         </div>
 
-                <div className="chat-box" ref={boxRef}>
-          {messages.map(m => {
-            const me = myId === m.from?.id;
-            const status = messageStatus[m._id] || {};
+        <div className="chat-box" ref={boxRef}>
+  {messages.map(m => {
+    const isSystem = m.kind === 'system' || m.from?.id === 'system';
 
-            let tickText = '';
-            let tickClass = 'ticks';
-
-            if (me) {
-              if (status.seen) {
-                tickText = '✓✓';
-                tickClass += ' ticks-seen';
-              } else if (status.delivered) {
-                tickText = '✓✓';
-              } else if (status.sent) {
-                tickText = '✓';
-              }
-            }
-
-            return (
-              <div key={m._id} className={`chat-msg ${me ? 'chat-me' : ''}`}>
-                <div className="small">
-                  {m.from?.name}
-                  {me && tickText && (
-                    <span className={tickClass} style={{ marginLeft: 6 }}>
-                      {tickText}
-                    </span>
-                  )}
-                </div>
-                <div>{m.body}</div>
-              </div>
-            );
-          })}
+    // render system messages as centered grey bubbles, no ticks
+    if (isSystem) {
+      return (
+        <div key={m._id} className="chat-msg system-msg">
+          <div className="small text-dim" style={{ textAlign: 'center' }}>
+            {m.body}
+          </div>
         </div>
+      );
+    }
 
+    const me = myId === m.from?.id;
+    const status = messageStatus[m._id] || {};
+
+    let tickText = '';
+    let tickClass = 'ticks';
+
+    if (me) {
+      if (status.seen) {
+        tickText = '✓✓';
+        tickClass += ' ticks-seen';
+      } else if (status.delivered) {
+        tickText = '✓✓';
+      } else if (status.sent) {
+        tickText = '✓';
+      }
+    }
+
+    return (
+      <div key={m._id} className={`chat-msg ${me ? 'chat-me' : ''}`}>
+        <div className="small">
+          {m.from?.name}
+          {me && tickText && (
+            <span className={tickClass} style={{ marginLeft: 6 }}>
+              {tickText}
+            </span>
+          )}
+        </div>
+        <div>{m.body}</div>
+      </div>
+    );
+  })}
+
+  {messages.length === 0 && (
+    <p className="small text-dim" style={{ textAlign: 'center' }}>
+      No messages yet. Say hi to start chatting!
+    </p>
+  )}
+</div>
+
+
+        {typingName && (
+          <div className="small" style={{ marginTop: 4 }}>
+            {typingName} is typing…
+          </div>
+        )}
 
         <form onSubmit={send} className="row" style={{ marginTop: 8 }}>
           <input
             value={text}
-            onChange={(e) => setText(e.target.value)}
+            onChange={handleInputChange}
             placeholder="Type a message..."
           />
           <button className="primary">Send</button>
@@ -595,7 +929,8 @@ function ChatModal({ who, active, onClose }) {
             ) : (
               <div className="grid" style={{ marginTop: 8 }}>
                 <div className="small">
-                  Amount: ₹{proposal} × {quantity} • Escrow fee (3%): ₹{buyerFee} • <b>Total: ₹{totalBuyerPays}</b>
+                  Amount: ₹{proposal} × {quantity} • Escrow fee (3%): ₹{buyerFee} •{' '}
+                  <b>Total: ₹{totalBuyerPays}</b>
                 </div>
                 {state === 'initiated' && (
                   <button
@@ -603,13 +938,17 @@ function ChatModal({ who, active, onClose }) {
                     type="button"
                     onClick={startPayment}
                   >
-                    Accept & Pay (Hold)
+                    Accept &amp; Pay (Hold)
                   </button>
                 )}
                 {state === 'paid_held' && (
                   <div className="row">
-                    <button className="primary" type="button" onClick={release}>Release Payment</button>
-                    <button type="button" onClick={report}>Report Fraud</button>
+                    <button className="primary" type="button" onClick={release}>
+                      Release Payment
+                    </button>
+                    <button type="button" onClick={report}>
+                      Report Fraud
+                    </button>
                   </div>
                 )}
               </div>
@@ -619,15 +958,26 @@ function ChatModal({ who, active, onClose }) {
 
         {/* Mock payment overlay */}
         {showPayment && (
-          <div className="modal-backdrop" style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)' }}>
+          <div
+            className="modal-backdrop"
+            style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)' }}
+          >
             <div className="modal" style={{ maxWidth: 420 }}>
               <h3>Mock Payment</h3>
               <p className="small">UPI-style simulation (no real gateway).</p>
               <div className="card" style={{ marginTop: 8 }}>
-                <div>Deal: <b>{deal?.title}</b></div>
-                <div>Quantity: <b>{quantity}</b></div>
-                <div>Amount per unit: <b>₹{proposal}</b></div>
-                <div>Escrow fee (3%): <b>₹{buyerFee}</b></div>
+                <div>
+                  Deal: <b>{deal?.title}</b>
+                </div>
+                <div>
+                  Quantity: <b>{quantity}</b>
+                </div>
+                <div>
+                  Amount per unit: <b>₹{proposal}</b>
+                </div>
+                <div>
+                  Escrow fee (3%): <b>₹{buyerFee}</b>
+                </div>
                 <div style={{ marginTop: 6 }}>
                   Total payable: <b>₹{totalBuyerPays}</b>
                 </div>
@@ -636,8 +986,13 @@ function ChatModal({ who, active, onClose }) {
                 </div>
               </div>
 
-              <div className="row" style={{ marginTop: 12, justifyContent: 'flex-end', gap: 8 }}>
-                <button type="button" onClick={cancelPayment}>Cancel</button>
+              <div
+                className="row"
+                style={{ marginTop: 12, justifyContent: 'flex-end', gap: 8 }}
+              >
+                <button type="button" onClick={cancelPayment}>
+                  Cancel
+                </button>
                 <button
                   className="primary"
                   type="button"
@@ -649,11 +1004,14 @@ function ChatModal({ who, active, onClose }) {
             </div>
           </div>
         )}
-
       </div>
     </div>
   );
 }
+
+/* =======================
+   ADMIN DASHBOARD
+   ======================= */
 
 function AdminPanel() {
   const [open, setOpen] = useState(false);
@@ -662,6 +1020,7 @@ function AdminPanel() {
   const [orders, setOrders] = useState([]);
   const [selectedOrder, setSelectedOrder] = useState(null);
   const [chatMessages, setChatMessages] = useState([]);
+  const [typingName] = useState(null); // kept for layout
 
   const adminHeaders = { 'x-admin-key': 'lossflip-admin' }; // NOTE: keep in sync with backend
 
@@ -672,13 +1031,13 @@ function AdminPanel() {
         api.get('/admin/stats', { headers: adminHeaders }),
         api.get('/admin/orders', {
           headers: adminHeaders,
-          params: { state: 'in_dispute' }   // focus on disputes first
+          params: { state: 'in_dispute' }
         })
       ]);
       setStats(statsRes.data);
-      setOrders(ordersRes.data);
+      setOrders(Array.isArray(ordersRes.data) ? ordersRes.data : ordersRes.data?.orders || []);
     } catch (err) {
-      console.error('Admin load error', err);
+      console.error('Admin load error', err.response?.data || err.message);
     } finally {
       setLoading(false);
     }
@@ -693,7 +1052,7 @@ function AdminPanel() {
     const res = await api.get(`/admin/orders/${order._id}/chat`, {
       headers: adminHeaders
     });
-    setChatMessages(res.data);
+    setChatMessages(Array.isArray(res.data) ? res.data : res.data?.messages || []);
   };
 
   if (!open) {
@@ -725,16 +1084,24 @@ function AdminPanel() {
           }}
         >
           <div className="card small">
-            Total deals<br /><b>{stats.totalDeals}</b>
+            Total deals
+            <br />
+            <b>{stats.totalDeals}</b>
           </div>
           <div className="card small">
-            Active deals<br /><b>{stats.activeDeals}</b>
+            Active deals
+            <br />
+            <b>{stats.activeDeals}</b>
           </div>
           <div className="card small">
-            Total orders<br /><b>{stats.totalOrders}</b>
+            Total orders
+            <br />
+            <b>{stats.totalOrders}</b>
           </div>
           <div className="card small">
-            Disputes<br /><b>{stats.disputes}</b>
+            Disputes
+            <br />
+            <b>{stats.disputes}</b>
           </div>
         </div>
       )}
@@ -780,6 +1147,11 @@ function AdminPanel() {
               <p className="small">No messages in this chat.</p>
             )}
           </div>
+          {typingName && (
+            <div className="small" style={{ marginTop: 4 }}>
+              {typingName} is typing…
+            </div>
+          )}
         </div>
       )}
     </div>
