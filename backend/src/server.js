@@ -9,16 +9,37 @@ import dealRouter from './routes/deal.routes.js';
 import adminRouter from './routes/admin.routes.js';
 import Order from './models/Order.js';
 import ChatMessage from './models/ChatMessage.js';
+import cookieParser from 'cookie-parser';
+import jwt from 'jsonwebtoken';
+
+import authRouter from './routes/auth.routes.js';
+
 
 const app = express();
-
-app.use(
-  cors({
-    origin: process.env.CLIENT_ORIGIN || 'http://localhost:5173',
-    credentials: true
-  })
-);
+app.use(cors({ origin: process.env.CLIENT_ORIGIN || 'http://localhost:5173', credentials: true }));
 app.use(express.json());
+app.use(cookieParser());
+
+// attach user from JWT cookie if present
+const JWT_SECRET = process.env.JWT_SECRET || 'lossflip-dev-secret';
+
+app.use((req, _res, next) => {
+  const token = req.cookies?.lossflip_token;
+  if (!token) return next();
+  try {
+    const payload = jwt.verify(token, JWT_SECRET);
+    req.user = {
+      _id: payload.sub,
+      name: payload.name,
+      email: payload.email,
+      role: payload.role
+    };
+  } catch (err) {
+    // invalid / expired token → ignore, act as guest
+  }
+  next();
+});
+
 
 const uri = process.env.MONGODB_URI;
 if (!uri) {
@@ -51,6 +72,15 @@ app.set('io', io);
 
 // tiny fake "auth" from headers (same as REST)
 function userFromHeaders(headers) {
+  // preferred: real user from headers (sent by frontend when logged in)
+  const realId = headers['x-user-id'] || headers['X-User-Id'];
+  const realName = headers['x-user-name'] || headers['X-User-Name'];
+
+  if (realId && realName) {
+    return { _id: realId.toString(), name: realName.toString() };
+  }
+
+  // fallback: old demo mode with raj/neha
   const who = (headers['x-user'] || headers['X-User'] || 'raj')
     .toString()
     .toLowerCase();
@@ -59,6 +89,7 @@ function userFromHeaders(headers) {
     ? { _id: '671111111111111111111112', name: 'Neha Buyer' }
     : { _id: '671111111111111111111111', name: 'Raj Student' };
 }
+
 
 io.on('connection', (socket) => {
   const u = userFromHeaders(socket.handshake.headers);
@@ -164,6 +195,7 @@ io.on('connection', (socket) => {
 // -----------------------------
 // REST routes
 // -----------------------------
+app.use('/api/auth', authRouter);
 app.use('/api/deals', dealRouter);
 app.use('/api/admin', adminRouter);
 

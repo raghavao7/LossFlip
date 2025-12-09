@@ -8,13 +8,19 @@ const r = Router();
 
 /* -------- inline fake auth (TEMP) -------- */
 function fakeAuth(req, _res, next) {
+  // 🔑 If JWT middleware already attached a real user, don't override it
+  if (req.user) return next();
+
   const who = (req.header('x-user') || 'raj').toLowerCase();
   req.user = who === 'neha'
     ? { _id: '671111111111111111111112', name: 'Neha Buyer', email: 'neha@example.com' }
     : { _id: '671111111111111111111111', name: 'Raj Student', email: 'raj@example.com' };
+
   next();
 }
+
 r.use(fakeAuth);
+
 
 /* ---------- helpers ---------- */
 

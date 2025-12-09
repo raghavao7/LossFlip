@@ -1,44 +1,153 @@
-
-
 import { useEffect, useRef, useState } from 'react';
 import { io } from 'socket.io-client';
-import { api, setActingUser } from './api';
+import { api } from './api';
 import './App.css';
 
+// Legacy demo IDs (not used in UI anymore but safe to keep)
 const RAJ_ID = '671111111111111111111111';
 const NEHA_ID = '671111111111111111111112';
 
 function getOrderStatusInfo(state) {
   switch (state) {
     case 'initiated':
-      return { label: 'Awaiting payment', color: '#ffb020' };   // yellow
+      return { label: 'Awaiting payment', color: '#ffb020' }; // yellow
     case 'paid_held':
-      return { label: 'In escrow (held)', color: '#4b9cff' };   // blue
+      return { label: 'In escrow (held)', color: '#4b9cff' }; // blue
     case 'released':
-      return { label: 'Completed', color: '#22c55e' };          // green
+      return { label: 'Completed', color: '#22c55e' }; // green
     case 'in_dispute':
-      return { label: 'In dispute', color: '#f97373' };         // red
+      return { label: 'In dispute', color: '#f97373' }; // red
     default:
-      return { label: state || 'Unknown', color: '#6b7280' };   // grey
+      return { label: state || 'Unknown', color: '#6b7280' }; // grey
   }
+}
+
+/* =======================
+   AUTH SCREEN (LOGIN / REGISTER)
+   ======================= */
+
+function AuthScreen({
+  authMode,
+  setAuthMode,
+  authForm,
+  setAuthForm,
+  authError,
+  setAuthError,
+  setAuthUser
+}) {
+  const handleSubmit = async () => {
+    try {
+      setAuthError('');
+      if (
+        !authForm.email ||
+        !authForm.password ||
+        (authMode === 'register' && !authForm.name)
+      ) {
+        setAuthError('Fill all required fields');
+        return;
+      }
+      const endpoint = authMode === 'login' ? '/auth/login' : '/auth/register';
+      const res = await api.post(endpoint, authForm);
+      setAuthUser(res.data);
+    } catch (err) {
+      const msg =
+        err.response?.data?.error || err.message || 'Failed to authenticate';
+      setAuthError(msg);
+    }
+  };
+
+  return (
+    <div className="container" style={{ maxWidth: 480 }}>
+      <h1>LossFlip</h1>
+      <p className="small">Login or create an account to start using the app.</p>
+
+      <div className="card" style={{ marginTop: 16 }}>
+        <div
+          className="row"
+          style={{ justifyContent: 'space-between', alignItems: 'center' }}
+        >
+          <b>{authMode === 'login' ? 'Login' : 'Register'}</b>
+          <button
+            type="button"
+            onClick={() => {
+              setAuthMode(authMode === 'login' ? 'register' : 'login');
+              setAuthError('');
+            }}
+          >
+            Switch to {authMode === 'login' ? 'Register' : 'Login'}
+          </button>
+        </div>
+
+        {authError && (
+          <p className="small" style={{ color: '#f97373', marginTop: 8 }}>
+            {authError}
+          </p>
+        )}
+
+        <div className="grid" style={{ marginTop: 8 }}>
+          {authMode === 'register' && (
+            <input
+              placeholder="Name"
+              value={authForm.name}
+              onChange={e =>
+                setAuthForm({ ...authForm, name: e.target.value })
+              }
+            />
+          )}
+          <input
+            placeholder="Email"
+            value={authForm.email}
+            onChange={e =>
+              setAuthForm({ ...authForm, email: e.target.value })
+            }
+          />
+          <input
+            placeholder="Password"
+            type="password"
+            value={authForm.password}
+            onChange={e =>
+              setAuthForm({ ...authForm, password: e.target.value })
+            }
+          />
+
+          <button className="primary" type="button" onClick={handleSubmit}>
+            {authMode === 'login' ? 'Login' : 'Register'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 /* =======================
    MAIN APP
    ======================= */
+
 export default function App() {
-  const [who, setWho] = useState('raj');
   const [health, setHealth] = useState(null);
   const [deals, setDeals] = useState([]);
   const [threads, setThreads] = useState([]);
   const [unread, setUnread] = useState({}); // orderId -> true
   const [chatOpen, setChatOpen] = useState(false);
-  const [active, setActive] = useState(null);  // { deal, order }
+  const [active, setActive] = useState(null); // { deal, order }
   const socketRef = useRef(null);
   const audioRef = useRef(null);
-  const myId = who === 'raj' ? RAJ_ID : NEHA_ID;
 
-  // 🔔 play notification sound
+  // Auth state
+  const [authUser, setAuthUser] = useState(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [authError, setAuthError] = useState('');
+  const [authMode, setAuthMode] = useState('login'); // 'login' | 'register'
+  const [authForm, setAuthForm] = useState({
+    name: '',
+    email: '',
+    password: ''
+  });
+
+  // REAL user ID (fallback to demo IDs only if needed in future)
+  const myId = authUser?._id;
+
+  // Notification sound
   const playPing = () => {
     if (!audioRef.current) return;
     try {
@@ -47,38 +156,12 @@ export default function App() {
     } catch (_) {}
   };
 
-
-
-
-
-
-
-
-
-  // // robust helpers: handle array OR {deals}, {orders}
-  // const refreshDeals = () =>
-  //   api.get('/deals').then(res => {
-  //     const data = res.data;
-  //     const list = Array.isArray(data) ? data : (data?.deals || []);
-  //     setDeals(list);
-  //   });
-
-
-
-
-
-
-
-
-
-
-
-    // NEW: location filter (per user)
+  // Location filter (per user)
   const [locationCity, setLocationCity] = useState(() => {
     return localStorage.getItem('lossflip_city') || '';
   });
 
-  // NEW: shared deal from URL like ?deal=abcdef
+  // Shared deal from URL like ?deal=abcdef
   const [sharedDealId] = useState(() => {
     try {
       const params = new URLSearchParams(window.location.search);
@@ -88,46 +171,75 @@ export default function App() {
     }
   });
 
-  // refreshDeals can optionally take a city override
-  const refreshDeals = (cityOverride) => {
+  // Deals fetch (optionally filtered by city)
+  const refreshDeals = cityOverride => {
     const city = cityOverride !== undefined ? cityOverride : locationCity;
     const params = city ? { city } : {};
     return api.get('/deals', { params }).then(res => setDeals(res.data));
   };
 
-
   const refreshThreads = () =>
     api.get('/deals/me/threads').then(res => {
       const data = res.data;
-      const list = Array.isArray(data) ? data : (data?.orders || data?.threads || []);
+      const list = Array.isArray(data)
+        ? data
+        : data?.orders || data?.threads || [];
       setThreads(list);
     });
 
+  // First, try auth/me to know if logged in
   useEffect(() => {
-    setActingUser(who);
-    api.get('/health').then(res => setHealth(res.data)).catch(() => {});
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await api.get('/auth/me');
+        if (!cancelled) setAuthUser(res.data);
+      } catch {
+        // not logged in
+      } finally {
+        if (!cancelled) setAuthLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Once logged in, load health/deals/threads + connect socket for thread notifications
+  useEffect(() => {
+    if (!authUser) return;
+
+    api
+      .get('/health')
+      .then(res => setHealth(res.data))
+      .catch(() => {});
+
     refreshDeals();
     refreshThreads();
 
-    const s = io('http://localhost:8080', { extraHeaders: { 'x-user': who } });
+    const extraHeaders = {
+      'x-user-id': authUser._id,
+      'x-user-name': authUser.name
+    };
+
+    const s = io('http://localhost:8080', { extraHeaders });
     socketRef.current = s;
 
-    // seller/buyer notifications for new / updated threads
-    s.on('thread:new', (payload) => {
+    s.on('thread:new', payload => {
       if (!payload?.orderId) return;
       setUnread(prev => ({ ...prev, [payload.orderId]: true }));
       refreshThreads();
       playPing();
     });
 
-    s.on('thread:updated', (payload) => {
+    s.on('thread:updated', payload => {
       if (!payload?.orderId) return;
       setUnread(prev => ({ ...prev, [payload.orderId]: true }));
       refreshThreads();
       playPing();
     });
 
-    s.on('connect_error', (e) => {
+    s.on('connect_error', e => {
       console.error('socket connect error', e?.message);
     });
 
@@ -135,13 +247,9 @@ export default function App() {
       s.disconnect();
       socketRef.current = null;
     };
-  }, [who]); // re-run when acting user changes
+  }, [authUser, locationCity]);
 
-  const switchUser = (u) => {
-    setWho(u);
-  };
-
-    const [form, setForm] = useState({
+  const [form, setForm] = useState({
     title: '',
     category: 'product',
     faceValue: 0,
@@ -155,8 +263,7 @@ export default function App() {
     pincode: ''
   });
 
-
-  const createDeal = async (e) => {
+  const createDeal = async e => {
     e.preventDefault();
     const payload = {
       ...form,
@@ -164,38 +271,42 @@ export default function App() {
       dealPrice: Number(form.dealPrice || 0),
       stock: Number(form.stock || 1),
       paymentMethodsAccepted: form.paymentMethodsAccepted
-        ? form.paymentMethodsAccepted.split(',').map(s => s.trim()).filter(Boolean)
+        ? form.paymentMethodsAccepted
+            .split(',')
+            .map(s => s.trim())
+            .filter(Boolean)
         : [],
       city: form.city,
       pincode: form.pincode
     };
     try {
       await api.post('/deals', payload);
-          setForm({
-      title: '',
-      category: 'product',
-      faceValue: 0,
-      dealPrice: 0,
-      description: '',
-      escrowRequired: true,
-      stock: 1,
-      paymentMethodsAccepted: 'UPI',
-      digitalSecret: '',
-      city: '',
-      pincode: ''
-    });
+      setForm({
+        title: '',
+        category: 'product',
+        faceValue: 0,
+        dealPrice: 0,
+        description: '',
+        escrowRequired: true,
+        stock: 1,
+        paymentMethodsAccepted: 'UPI',
+        digitalSecret: '',
+        city: '',
+        pincode: ''
+      });
       refreshDeals();
     } catch (err) {
       console.error('create deal failed', err.response?.data || err.message);
     }
   };
 
-  // Grab deal: reuse existing initiated thread for this buyer+deal if present
-  const grab = async (deal) => {
-    const existing = threads.find(t =>
-      t.dealId === deal._id &&
-      t.state === 'initiated' &&
-      t.buyer?.id === myId
+  // Grab deal: reuse initiated thread if present
+  const grab = async deal => {
+    const existing = threads.find(
+      t =>
+        t.dealId === deal._id &&
+        t.state === 'initiated' &&
+        t.buyer?.id === myId
     );
 
     if (existing) {
@@ -221,7 +332,7 @@ export default function App() {
     }
   };
 
-  const openThread = (t) => {
+  const openThread = t => {
     const deal = deals.find(d => d._id === t.dealId) || t.deal || null;
     setActive({ deal, order: t });
     setUnread(prev => {
@@ -232,48 +343,94 @@ export default function App() {
     setChatOpen(true);
   };
 
+  // 1) While checking auth
+  if (authLoading) {
+    return (
+      <div className="container">
+        <p>Loading...</p>
+      </div>
+    );
+  }
+
+  // 2) Not logged in → only auth screen
+  if (!authUser) {
+    return (
+      <AuthScreen
+        authMode={authMode}
+        setAuthMode={setAuthMode}
+        authForm={authForm}
+        setAuthForm={setAuthForm}
+        authError={authError}
+        setAuthError={setAuthError}
+        setAuthUser={setAuthUser}
+      />
+    );
+  }
+
+  // 3) Logged in → full app
   return (
     <div className="container">
-            <div className="row" style={{ justifyContent: 'space-between' }}>
-        <h1>LossFlip (MVP)</h1>
+      <div className="row" style={{ justifyContent: 'space-between' }}>
+        <h1>LossFlip</h1>
         <div className="row" style={{ gap: 12, alignItems: 'center' }}>
-          <div>
-            Acting as:&nbsp;
-            <select value={who} onChange={e => switchUser(e.target.value)}>
-              <option value="raj">Raj (seller/buyer)</option>
-              <option value="neha">Neha (buyer/seller)</option>
-            </select>
+          <div className="small">
+            Logged in as <b>{authUser.name}</b> ({authUser.email})
           </div>
-
-          <div>
-            Location:&nbsp;
-            <select
-              value={locationCity}
-              onChange={async (e) => {
-                const city = e.target.value;
-                setLocationCity(city);
-                localStorage.setItem('lossflip_city', city);
-                await refreshDeals(city);
-              }}
-            >
-              <option value="">All locations</option>
-              <option value="Hyderabad">Hyderabad</option>
-              <option value="Delhi">Delhi</option>
-              <option value="Bangalore">Bangalore</option>
-              <option value="Chennai">Chennai</option>
-              <option value="Mumbai">Mumbai</option>
-            </select>
-          </div>
+          <button
+            type="button"
+            onClick={async () => {
+              await api.post('/auth/logout');
+              setAuthUser(null);
+            }}
+          >
+            Logout
+          </button>
         </div>
       </div>
-
 
       <p className="small">API health: {health ? 'OK' : '…checking'}</p>
 
       {/* notification sound */}
       <audio ref={audioRef} src="/notification.mp3" preload="auto" />
 
+      {/* LOCATION SELECTOR */}
+      <div
+        className="card"
+        style={{
+          marginTop: 12,
+          marginBottom: 12,
+          display: 'flex',
+          justifyContent: 'flex-end'
+        }}
+      >
+        <div className="row" style={{ gap: 8, alignItems: 'center' }}>
+          <span className="small">Location:</span>
+          <select
+            value={locationCity}
+            onChange={async e => {
+              const city = e.target.value;
+              setLocationCity(city);
+              if (city) {
+                localStorage.setItem('lossflip_city', city);
+              } else {
+                localStorage.removeItem('lossflip_city');
+              }
+              await refreshDeals(city);
+            }}
+          >
+            <option value="">All</option>
+            <option value="Hyderabad">Hyderabad</option>
+            <option value="Delhi">Delhi</option>
+            <option value="Bangalore">Bangalore</option>
+            <option value="Chennai">Chennai</option>
+            <option value="Mumbai">Mumbai</option>
+          </select>
+        </div>
+      </div>
+
+      {/* MAIN GRID */}
       <div className="grid" style={{ gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+        {/* CREATE DEAL */}
         <div className="card">
           <h2>Create Deal</h2>
           <form onSubmit={createDeal} className="grid">
@@ -295,18 +452,24 @@ export default function App() {
               type="number"
               placeholder="Face value (optional)"
               value={form.faceValue}
-              onChange={e => setForm({ ...form, faceValue: e.target.value })}
+              onChange={e =>
+                setForm({ ...form, faceValue: e.target.value })
+              }
             />
             <input
               type="number"
               placeholder="Deal price"
               value={form.dealPrice}
-              onChange={e => setForm({ ...form, dealPrice: e.target.value })}
+              onChange={e =>
+                setForm({ ...form, dealPrice: e.target.value })
+              }
             />
             <textarea
               placeholder="Description"
               value={form.description}
-              onChange={e => setForm({ ...form, description: e.target.value })}
+              onChange={e =>
+                setForm({ ...form, description: e.target.value })
+              }
             />
             <label>
               <input
@@ -328,10 +491,12 @@ export default function App() {
               placeholder="Payment methods (e.g., UPI, USDT)"
               value={form.paymentMethodsAccepted}
               onChange={e =>
-                setForm({ ...form, paymentMethodsAccepted: e.target.value })
+                setForm({
+                  ...form,
+                  paymentMethodsAccepted: e.target.value
+                })
               }
             />
-            {/* NEW: location for this deal */}
             <input
               placeholder="City (e.g., Hyderabad)"
               value={form.city}
@@ -355,27 +520,38 @@ export default function App() {
           </form>
         </div>
 
+        {/* DEALS + CHATS */}
         <div className="grid" style={{ gap: 16 }}>
+          {/* Latest Deals */}
           <div className="card">
             <h2>Latest Deals</h2>
             <ul className="list">
               {deals.map(d => {
                 const iAmSeller =
-                  (d.seller?.id === RAJ_ID && who === 'raj') ||
-                  (d.seller?.id === NEHA_ID && who === 'neha');
-                                return (
+                  myId &&
+                  d.seller?.id &&
+                  String(d.seller.id) === String(myId);
+
+                return (
                   <li
                     key={d._id}
                     className={sharedDealId === d._id ? 'shared-deal' : ''}
                   >
-                    <div className="row" style={{ justifyContent: 'space-between' }}>
+                    <div
+                      className="row"
+                      style={{ justifyContent: 'space-between' }}
+                    >
                       <div>
                         <b>{d.title}</b>{' '}
                         <span className="badge">{d.category}</span>
                         {sharedDealId === d._id && (
                           <span
                             className="badge"
-                            style={{ marginLeft: 6, backgroundColor: '#4b9cff', color: '#0b0b10' }}
+                            style={{
+                              marginLeft: 6,
+                              backgroundColor: '#4b9cff',
+                              color: '#0b0b10'
+                            }}
                           >
                             Shared deal
                           </span>
@@ -383,33 +559,50 @@ export default function App() {
                         <br />
                         <span>₹{d.dealPrice}</span>
                         {d.faceValue > 0 && (
-                          <span> • Face ₹{d.faceValue} • Disc {d.discountPct}%</span>
+                          <span>
+                            {' '}
+                            • Face ₹{d.faceValue} • Disc {d.discountPct}%
+                          </span>
                         )}
                         <div className="small">
                           by {d.seller?.name} • Stock: {d.stock}
                           {d.location?.city && (
                             <>
-                              {' '}• {d.location.city}
-                              {d.location?.pincode && ` (${d.location.pincode})`}
+                              {' '}
+                              • {d.location.city}
+                              {d.location?.pincode &&
+                                ` (${d.location.pincode})`}
                             </>
                           )}
                         </div>
                       </div>
 
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <div
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 8
+                        }}
+                      >
                         {/* buyer side */}
                         {!iAmSeller && d.stock > 0 && (
-                          <button onClick={() => grab(d)} className="primary">
+                          <button
+                            onClick={() => grab(d)}
+                            className="primary"
+                          >
                             Grab
                           </button>
                         )}
 
-                        {/* seller quick restock (we already added before) */}
+                        {/* seller quick restock */}
                         {iAmSeller && (
                           <button
                             type="button"
                             onClick={async () => {
-                              const raw = window.prompt('Add how many units to stock?', '1');
+                              const raw = window.prompt(
+                                'Add how many units to stock?',
+                                '1'
+                              );
                               if (!raw) return;
                               const amount = Number(raw);
                               if (!Number.isFinite(amount) || amount <= 0) {
@@ -417,10 +610,15 @@ export default function App() {
                                 return;
                               }
                               try {
-                                await api.post(`/deals/${d._id}/restock`, { amount });
+                                await api.post(`/deals/${d._id}/restock`, {
+                                  amount
+                                });
                                 await refreshDeals();
                               } catch (err) {
-                                console.error('restock failed', err);
+                                console.error(
+                                  'restock failed',
+                                  err.response?.data || err.message
+                                );
                                 alert('Failed to restock');
                               }
                             }}
@@ -429,7 +627,7 @@ export default function App() {
                           </button>
                         )}
 
-                        {/* NEW: shareable link */}
+                        {/* shareable link */}
                         <button
                           type="button"
                           onClick={async () => {
@@ -438,18 +636,21 @@ export default function App() {
                               await navigator.clipboard.writeText(url);
                               alert('Deal link copied to clipboard');
                             } catch {
-                              alert(url); // fallback: at least show the URL
+                              alert(url);
                             }
                           }}
                         >
                           Share
                         </button>
 
-                        {/* sold out badge */}
+                        {/* sold out */}
                         {d.stock === 0 && (
                           <span
                             className="badge"
-                            style={{ backgroundColor: '#6b7280', color: '#0b0b10' }}
+                            style={{
+                              backgroundColor: '#6b7280',
+                              color: '#0b0b10'
+                            }}
                           >
                             Sold out
                           </span>
@@ -457,36 +658,38 @@ export default function App() {
                       </div>
                     </div>
 
-                    <div className="small" style={{ marginTop: 6 }}>{d.description}</div>
+                    <div className="small" style={{ marginTop: 6 }}>
+                      {d.description}
+                    </div>
                   </li>
                 );
-
               })}
-                            {deals.length === 0 && (
-                <li className="small">
-                  {locationCity
-                    ? <>No deals in <b>{locationCity}</b>.{' '}
-                       <button
-                         type="button"
-                         onClick={async () => {
-                           setLocationCity('');
-                           localStorage.removeItem('lossflip_city');
-                           await refreshDeals('');
-                         }}
-                       >
-                         Show all deals
-                       </button>
-                     </>
-                    : 'No deals yet. Create the first one!'}
-                </li>
-              )}
 
               {deals.length === 0 && (
-                <li className="small text-dim">No deals yet. Create the first one!</li>
+                <li className="small">
+                  {locationCity ? (
+                    <>
+                      No deals in <b>{locationCity}</b>.{' '}
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          setLocationCity('');
+                          localStorage.removeItem('lossflip_city');
+                          await refreshDeals('');
+                        }}
+                      >
+                        Show all deals
+                      </button>
+                    </>
+                  ) : (
+                    'No deals yet. Create the first one!'
+                  )}
+                </li>
               )}
             </ul>
           </div>
 
+          {/* Chats */}
           <div className="card">
             <h2>
               Chats
@@ -514,7 +717,9 @@ export default function App() {
                     <div>
                       <div>
                         <b>{t.deal?.title || 'Deal'}</b>{' '}
-                        <span className="badge">{t.deal?.category || '-'}</span>
+                        <span className="badge">
+                          {t.deal?.category || '-'}
+                        </span>
                         {unread[t._id] && (
                           <span
                             style={{
@@ -540,7 +745,8 @@ export default function App() {
                         >
                           {statusInfo.label}
                         </span>
-                        • ₹{t.amount} × {t.quantity} = ₹{t.amount * t.quantity}
+                        • ₹{t.amount} × {t.quantity} = ₹
+                        {t.amount * t.quantity}
                       </div>
                     </div>
                     <button>Open</button>
@@ -557,9 +763,11 @@ export default function App() {
         </div>
       </div>
 
+      {/* CHAT MODAL */}
       {chatOpen && active && (
         <ChatModal
-          who={who}
+          currentUserId={myId}
+          currentUserName={authUser.name}
           active={active}
           onClose={() => {
             setChatOpen(false);
@@ -580,7 +788,7 @@ export default function App() {
    CHAT MODAL
    ======================= */
 
-function ChatModal({ who, active, onClose }) {
+function ChatModal({ currentUserId, currentUserName, active, onClose }) {
   const { deal, order } = active;
   const [messages, setMessages] = useState([]);
   const [text, setText] = useState('');
@@ -595,29 +803,42 @@ function ChatModal({ who, active, onClose }) {
   const [typingName, setTypingName] = useState(null);
   const typingTimeoutRef = useRef(null);
 
-  const myId = who === 'raj' ? RAJ_ID : NEHA_ID;
+  const myId = currentUserId;
+
   const [messageStatus, setMessageStatus] = useState({}); // id -> { sent, delivered, seen }
   const initialAcksSent = useRef(false);
-  const iAmSeller =
-    (deal?.seller?.id === RAJ_ID && who === 'raj') ||
-    (deal?.seller?.id === NEHA_ID && who === 'neha');
 
-  // load history + join room + listen (including ticks + typing)
+  const iAmSeller =
+    myId && deal?.seller?.id && String(deal.seller.id) === String(myId);
+
+  // load history + join room + listen (ticks + typing)
   useEffect(() => {
+    // load history
     api
       .get(`/deals/orders/${order._id}/chat`)
-      .then(res => setMessages(Array.isArray(res.data) ? res.data : res.data?.messages || []))
+      .then(res =>
+        setMessages(
+          Array.isArray(res.data) ? res.data : res.data?.messages || []
+        )
+      )
       .catch(err => console.error('load chat failed', err));
 
-    const s = io('http://localhost:8080', { extraHeaders: { 'x-user': who } });
+    const extraHeaders = {
+      'x-user-id': myId,
+      'x-user-name': currentUserName || 'User'
+    };
+
+    const s = io('http://localhost:8080', { extraHeaders });
     socketRef.current = s;
 
-    s.on('connect_error', (e) => console.error('socket connect error', e?.message));
+    s.on('connect_error', e =>
+      console.error('socket connect error', e?.message)
+    );
 
     s.emit('chat:join', { dealId: order.dealId, orderId: order._id });
     s.on('chat:joined', () => {});
 
-    s.on('chat:new', (m) => {
+    s.on('chat:new', m => {
       if (m.orderId !== order._id) return;
 
       setMessages(prev => [...prev, m]);
@@ -626,9 +847,14 @@ function ChatModal({ who, active, onClose }) {
         const next = { ...prev };
 
         if (m.from?.id === myId) {
+          // my outgoing message reached server
           next[m._id] = { ...(next[m._id] || {}), sent: true };
         } else {
-          s.emit('chat:delivered', { orderId: order._id, messageIds: [m._id] });
+          // incoming message: I'm viewing this chat → delivered + seen
+          s.emit('chat:delivered', {
+            orderId: order._id,
+            messageIds: [m._id]
+          });
           s.emit('chat:seen', { orderId: order._id, messageId: m._id });
         }
 
@@ -636,7 +862,7 @@ function ChatModal({ who, active, onClose }) {
       });
     });
 
-    s.on('order:updated', (u) => {
+    s.on('order:updated', u => {
       if (u.orderId !== order._id) return;
       if (typeof u.amount === 'number') setProposal(u.amount);
       if (typeof u.quantity === 'number') setQuantity(u.quantity);
@@ -692,16 +918,15 @@ function ChatModal({ who, active, onClose }) {
       s.disconnect();
       if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
     };
-  }, [order._id, order.dealId, who, myId]);
+  }, [order._id, order.dealId, myId, currentUserName]);
 
-    // When I open this chat and see the history, mark all
-  // incoming messages as delivered + the latest as seen.
+  // When I open this chat and see the history, mark all incoming as delivered,
+  // and the latest as seen.
   useEffect(() => {
     if (!socketRef.current) return;
     if (initialAcksSent.current) return;
     if (!messages.length) return;
 
-    // messages from the OTHER user
     const incomingIds = messages
       .filter(m => m.from?.id && m.from.id !== myId)
       .map(m => m._id)
@@ -711,13 +936,11 @@ function ChatModal({ who, active, onClose }) {
 
     initialAcksSent.current = true;
 
-    // Mark all as delivered
     socketRef.current.emit('chat:delivered', {
       orderId: order._id,
       messageIds: incomingIds
     });
 
-    // Mark the latest as seen
     const lastId = incomingIds[incomingIds.length - 1];
     socketRef.current.emit('chat:seen', {
       orderId: order._id,
@@ -725,12 +948,13 @@ function ChatModal({ who, active, onClose }) {
     });
   }, [messages, myId, order._id]);
 
-
   useEffect(() => {
-    if (boxRef.current) boxRef.current.scrollTop = boxRef.current.scrollHeight;
+    if (boxRef.current) {
+      boxRef.current.scrollTop = boxRef.current.scrollHeight;
+    }
   }, [messages]);
 
-  const send = (e) => {
+  const send = e => {
     e.preventDefault();
     const body = text.trim();
     if (!body || !socketRef.current) return;
@@ -742,7 +966,7 @@ function ChatModal({ who, active, onClose }) {
     setText('');
   };
 
-  const handleInputChange = (e) => {
+  const handleInputChange = e => {
     const value = e.target.value;
     setText(value);
     if (!socketRef.current) return;
@@ -761,14 +985,15 @@ function ChatModal({ who, active, onClose }) {
   };
 
   const startPayment = () => {
-    const fakeId = 'TXN-' + Math.random().toString(36).substring(2, 10).toUpperCase();
+    const fakeId =
+      'TXN-' + Math.random().toString(36).substring(2, 10).toUpperCase();
     setTxnId(fakeId);
     setShowPayment(true);
   };
 
   const confirmPayment = async () => {
     const { data } = await api.post(`/deals/orders/${order._id}/accept`);
-    setState(data.state);          // should become 'paid_held'
+    setState(data.state);
     setShowPayment(false);
   };
 
@@ -784,25 +1009,39 @@ function ChatModal({ who, active, onClose }) {
   const report = async () => {
     const reason = prompt('Reason? (short)');
     const proof = prompt('Proof URL(s) comma-separated');
-    const proofs = (proof || '').split(',').map(s => s.trim()).filter(Boolean);
-    const { data } = await api.post(`/deals/orders/${order._id}/report`, { reason, proofs });
+    const proofs = (proof || '')
+      .split(',')
+      .map(s => s.trim())
+      .filter(Boolean);
+    const { data } = await api.post(`/deals/orders/${order._id}/report`, {
+      reason,
+      proofs
+    });
     setState(data.state);
   };
 
-  const changeQty = async (delta) => {
+  const changeQty = async delta => {
     const next = quantity + delta;
     if (next < 1) return;
-    const { data } = await api.post(`/deals/orders/${order._id}/quantity`, { quantity: next });
+    const { data } = await api.post(`/deals/orders/${order._id}/quantity`, {
+      quantity: next
+    });
     setQuantity(data.quantity);
   };
 
-  const buyerFee = Math.round(Number(proposal || 0) * Number(quantity || 1) * 0.03);
-  const totalBuyerPays = Number(proposal || 0) * Number(quantity || 1) + buyerFee;
+  const buyerFee = Math.round(
+    Number(proposal || 0) * Number(quantity || 1) * 0.03
+  );
+  const totalBuyerPays =
+    Number(proposal || 0) * Number(quantity || 1) + buyerFee;
 
   return (
     <div className="modal-backdrop">
       <div className="modal">
-        <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+        <div
+          className="row"
+          style={{ justifyContent: 'space-between', alignItems: 'center' }}
+        >
           <div>
             <h3>Chat — {deal?.title || 'Deal'}</h3>
             <div className="small">
@@ -822,59 +1061,67 @@ function ChatModal({ who, active, onClose }) {
         </div>
 
         <div className="chat-box" ref={boxRef}>
-  {messages.map(m => {
-    const isSystem = m.kind === 'system' || m.from?.id === 'system';
+          {messages.map(m => {
+            const isSystem =
+              m.kind === 'system' || m.from?.id === 'system';
 
-    // render system messages as centered grey bubbles, no ticks
-    if (isSystem) {
-      return (
-        <div key={m._id} className="chat-msg system-msg">
-          <div className="small text-dim" style={{ textAlign: 'center' }}>
-            {m.body}
-          </div>
-        </div>
-      );
-    }
+            if (isSystem) {
+              return (
+                <div key={m._id} className="chat-msg system-msg">
+                  <div
+                    className="small text-dim"
+                    style={{ textAlign: 'center' }}
+                  >
+                    {m.body}
+                  </div>
+                </div>
+              );
+            }
 
-    const me = myId === m.from?.id;
-    const status = messageStatus[m._id] || {};
+            const me = myId === m.from?.id;
+            const status = messageStatus[m._id] || {};
 
-    let tickText = '';
-    let tickClass = 'ticks';
+            let tickText = '';
+            let tickClass = 'ticks';
 
-    if (me) {
-      if (status.seen) {
-        tickText = '✓✓';
-        tickClass += ' ticks-seen';
-      } else if (status.delivered) {
-        tickText = '✓✓';
-      } else if (status.sent) {
-        tickText = '✓';
-      }
-    }
+            if (me) {
+              if (status.seen) {
+                tickText = '✓✓';
+                tickClass += ' ticks-seen';
+              } else if (status.delivered) {
+                tickText = '✓✓';
+              } else if (status.sent) {
+                tickText = '✓';
+              }
+            }
 
-    return (
-      <div key={m._id} className={`chat-msg ${me ? 'chat-me' : ''}`}>
-        <div className="small">
-          {m.from?.name}
-          {me && tickText && (
-            <span className={tickClass} style={{ marginLeft: 6 }}>
-              {tickText}
-            </span>
+            return (
+              <div
+                key={m._id}
+                className={`chat-msg ${me ? 'chat-me' : ''}`}
+              >
+                <div className="small">
+                  {m.from?.name}
+                  {me && tickText && (
+                    <span className={tickClass} style={{ marginLeft: 6 }}>
+                      {tickText}
+                    </span>
+                  )}
+                </div>
+                <div>{m.body}</div>
+              </div>
+            );
+          })}
+
+          {messages.length === 0 && (
+            <p
+              className="small text-dim"
+              style={{ textAlign: 'center' }}
+            >
+              No messages yet. Say hi to start chatting!
+            </p>
           )}
         </div>
-        <div>{m.body}</div>
-      </div>
-    );
-  })}
-
-  {messages.length === 0 && (
-    <p className="small text-dim" style={{ textAlign: 'center' }}>
-      No messages yet. Say hi to start chatting!
-    </p>
-  )}
-</div>
-
 
         {typingName && (
           <div className="small" style={{ marginTop: 4 }}>
@@ -882,7 +1129,11 @@ function ChatModal({ who, active, onClose }) {
           </div>
         )}
 
-        <form onSubmit={send} className="row" style={{ marginTop: 8 }}>
+        <form
+          onSubmit={send}
+          className="row"
+          style={{ marginTop: 8 }}
+        >
           <input
             value={text}
             onChange={handleInputChange}
@@ -893,7 +1144,10 @@ function ChatModal({ who, active, onClose }) {
 
         {deal?.escrowRequired && (
           <div className="card" style={{ marginTop: 12 }}>
-            <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+            <div
+              className="row"
+              style={{ justifyContent: 'space-between', alignItems: 'center' }}
+            >
               <b>Escrow</b>
               <span
                 className="badge"
@@ -908,11 +1162,24 @@ function ChatModal({ who, active, onClose }) {
 
             {/* Quantity controls (buyer side while initiated) */}
             {!iAmSeller && state === 'initiated' && (
-              <div className="row" style={{ marginTop: 8, alignItems: 'center' }}>
+              <div
+                className="row"
+                style={{ marginTop: 8, alignItems: 'center' }}
+              >
                 <span className="small">Quantity:&nbsp;</span>
-                <button type="button" onClick={() => changeQty(-1)}>-</button>
+                <button
+                  type="button"
+                  onClick={() => changeQty(-1)}
+                >
+                  -
+                </button>
                 <span style={{ margin: '0 8px' }}>{quantity}</span>
-                <button type="button" onClick={() => changeQty(1)}>+</button>
+                <button
+                  type="button"
+                  onClick={() => changeQty(1)}
+                >
+                  +
+                </button>
               </div>
             )}
 
@@ -924,13 +1191,15 @@ function ChatModal({ who, active, onClose }) {
                   onChange={e => setProposal(e.target.value)}
                   placeholder="Propose amount (per unit)"
                 />
-                <button type="button" onClick={propose}>Propose</button>
+                <button type="button" onClick={propose}>
+                  Propose
+                </button>
               </div>
             ) : (
               <div className="grid" style={{ marginTop: 8 }}>
                 <div className="small">
-                  Amount: ₹{proposal} × {quantity} • Escrow fee (3%): ₹{buyerFee} •{' '}
-                  <b>Total: ₹{totalBuyerPays}</b>
+                  Amount: ₹{proposal} × {quantity} • Escrow fee (3%): ₹
+                  {buyerFee} • <b>Total: ₹{totalBuyerPays}</b>
                 </div>
                 {state === 'initiated' && (
                   <button
@@ -943,7 +1212,11 @@ function ChatModal({ who, active, onClose }) {
                 )}
                 {state === 'paid_held' && (
                   <div className="row">
-                    <button className="primary" type="button" onClick={release}>
+                    <button
+                      className="primary"
+                      type="button"
+                      onClick={release}
+                    >
                       Release Payment
                     </button>
                     <button type="button" onClick={report}>
@@ -960,11 +1233,17 @@ function ChatModal({ who, active, onClose }) {
         {showPayment && (
           <div
             className="modal-backdrop"
-            style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)' }}
+            style={{
+              position: 'fixed',
+              inset: 0,
+              background: 'rgba(0,0,0,0.45)'
+            }}
           >
             <div className="modal" style={{ maxWidth: 420 }}>
               <h3>Mock Payment</h3>
-              <p className="small">UPI-style simulation (no real gateway).</p>
+              <p className="small">
+                UPI-style simulation (no real gateway).
+              </p>
               <div className="card" style={{ marginTop: 8 }}>
                 <div>
                   Deal: <b>{deal?.title}</b>
@@ -988,7 +1267,11 @@ function ChatModal({ who, active, onClose }) {
 
               <div
                 className="row"
-                style={{ marginTop: 12, justifyContent: 'flex-end', gap: 8 }}
+                style={{
+                  marginTop: 12,
+                  justifyContent: 'flex-end',
+                  gap: 8
+                }}
               >
                 <button type="button" onClick={cancelPayment}>
                   Cancel
@@ -1022,7 +1305,7 @@ function AdminPanel() {
   const [chatMessages, setChatMessages] = useState([]);
   const [typingName] = useState(null); // kept for layout
 
-  const adminHeaders = { 'x-admin-key': 'lossflip-admin' }; // NOTE: keep in sync with backend
+  const adminHeaders = { 'x-admin-key': 'lossflip-admin' };
 
   const load = async () => {
     setLoading(true);
@@ -1035,7 +1318,11 @@ function AdminPanel() {
         })
       ]);
       setStats(statsRes.data);
-      setOrders(Array.isArray(ordersRes.data) ? ordersRes.data : ordersRes.data?.orders || []);
+      setOrders(
+        Array.isArray(ordersRes.data)
+          ? ordersRes.data
+          : ordersRes.data?.orders || []
+      );
     } catch (err) {
       console.error('Admin load error', err.response?.data || err.message);
     } finally {
@@ -1047,12 +1334,14 @@ function AdminPanel() {
     if (open) load();
   }, [open]);
 
-  const openChat = async (order) => {
+  const openChat = async order => {
     setSelectedOrder(order);
     const res = await api.get(`/admin/orders/${order._id}/chat`, {
       headers: adminHeaders
     });
-    setChatMessages(Array.isArray(res.data) ? res.data : res.data?.messages || []);
+    setChatMessages(
+      Array.isArray(res.data) ? res.data : res.data?.messages || []
+    );
   };
 
   if (!open) {
@@ -1067,7 +1356,10 @@ function AdminPanel() {
 
   return (
     <div className="card" style={{ marginTop: 24 }}>
-      <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+      <div
+        className="row"
+        style={{ justifyContent: 'space-between', alignItems: 'center' }}
+      >
         <h2>Admin dashboard (demo)</h2>
         <button onClick={() => setOpen(false)}>Close</button>
       </div>
@@ -1110,15 +1402,22 @@ function AdminPanel() {
       <ul className="list">
         {orders.map(o => (
           <li key={o._id}>
-            <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+            <div
+              className="row"
+              style={{
+                justifyContent: 'space-between',
+                alignItems: 'center'
+              }}
+            >
               <div>
                 <div>
                   <b>{o.deal?.title || 'Deal'}</b>{' '}
                   <span className="badge">{o.deal?.category || '-'}</span>
                 </div>
                 <div className="small">
-                  {o.seller?.name} ↔ {o.buyer?.name} • State: {o.state}{' '}
-                  • ₹{o.amount} × {o.quantity} = ₹{o.amount * o.quantity}
+                  {o.seller?.name} ↔ {o.buyer?.name} • State: {o.state} • ₹
+                  {o.amount} × {o.quantity} = ₹
+                  {o.amount * o.quantity}
                 </div>
               </div>
               <button onClick={() => openChat(o)}>View chat</button>
@@ -1138,7 +1437,11 @@ function AdminPanel() {
           </p>
           <div className="chat-box" style={{ maxHeight: 260 }}>
             {chatMessages.map(m => (
-              <div key={m._id} className="chat-msg" style={{ marginBottom: 4 }}>
+              <div
+                key={m._id}
+                className="chat-msg"
+                style={{ marginBottom: 4 }}
+              >
                 <div className="small">{m.from?.name}</div>
                 <div>{m.body}</div>
               </div>
